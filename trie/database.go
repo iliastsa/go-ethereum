@@ -87,10 +87,9 @@ type Database struct {
 	gcnodes uint64             // Nodes garbage collected since last commit
 	gcsize  common.StorageSize // Data storage garbage collected since last commit
 
-	flushtime  time.Duration      // Time spent on data flushing since last commit
-	flushnodes uint64             // Nodes flushed since last commit
-	flushsize  common.StorageSize // Data storage flushed since last commit
-
+	flushtime     time.Duration      // Time spent on data flushing since last commit
+	flushnodes    uint64             // Nodes flushed since last commit
+	flushsize     common.StorageSize // Data storage flushed since last commit
 	dirtiesSize   common.StorageSize // Storage size of the dirty node cache (exc. metadata)
 	childrenSize  common.StorageSize // Storage size of the external children tracking
 	preimagesSize common.StorageSize // Storage size of the preimages cache
@@ -363,10 +362,15 @@ func (db *Database) insertPreimage(hash common.Hash, preimage []byte) {
 
 // node retrieves a cached trie node from memory, or returns nil if none can be
 // found in the memory cache.
-func (db *Database) node(hash common.Hash) node {
+func (db *Database) node(hash common.Hash, prefix []byte) node {
+	key := make([]byte, len(prefix)+len(hash))
+
+	copy(key, prefix)
+	copy(key[len(prefix):], hash[:])
+
 	// Retrieve the node from the clean cache if available
 	if db.cleans != nil {
-		if enc := db.cleans.Get(nil, hash[:]); enc != nil {
+		if enc := db.cleans.Get(nil, key); enc != nil {
 			memcacheCleanHitMeter.Mark(1)
 			memcacheCleanReadMeter.Mark(int64(len(enc)))
 			return mustDecodeNode(hash[:], enc)
@@ -385,7 +389,7 @@ func (db *Database) node(hash common.Hash) node {
 	memcacheDirtyMissMeter.Mark(1)
 
 	// Content unavailable in memory, attempt to retrieve from disk
-	enc, err := db.diskdb.Get(hash[:])
+	enc, err := db.diskdb.Get(key)
 	if err != nil || enc == nil {
 		return nil
 	}

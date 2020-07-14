@@ -121,12 +121,15 @@ type cachingDB struct {
 
 // OpenTrie opens the main account trie at a specific root hash.
 func (db *cachingDB) OpenTrie(root common.Hash) (Trie, error) {
+	// TODO: Check this. Something like the following is probably needed:
+	// 1. Make a lookup of the hash to find a representative address for the given storage root.
+	// 2. If the lookup failed, then just leave the code as is.
 	return trie.NewSecure(root, db.db)
 }
 
 // OpenStorageTrie opens the storage trie of an account.
 func (db *cachingDB) OpenStorageTrie(addrHash, root common.Hash) (Trie, error) {
-	return trie.NewSecure(root, db.db)
+	return trie.NewSecureStorage(root, addrHash, db.db)
 }
 
 // CopyTrie returns an independent copy of the given trie.

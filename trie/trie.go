@@ -52,6 +52,9 @@ type Trie struct {
 	// hashing operation. This number will not directly map to the number of
 	// actually unhashed nodes
 	unhashed int
+
+	// Prefix that will be added to every db access
+	prefix []byte
 }
 
 // newFlag returns the cache flag value for a newly created node.
@@ -72,6 +75,25 @@ func New(root common.Hash, db *Database) (*Trie, error) {
 	trie := &Trie{
 		db: db,
 	}
+	if root != (common.Hash{}) && root != emptyRoot {
+		rootnode, err := trie.resolveHash(root[:], nil)
+		if err != nil {
+			return nil, err
+		}
+		trie.root = rootnode
+	}
+	return trie, nil
+}
+
+func NewWithPrefix(root common.Hash, prefix []byte, db *Database) (*Trie, error) {
+	if db == nil {
+		panic("trie.New called without a database")
+	}
+	trie := &Trie{
+		db:     db,
+		prefix: prefix,
+	}
+
 	if root != (common.Hash{}) && root != emptyRoot {
 		rootnode, err := trie.resolveHash(root[:], nil)
 		if err != nil {
@@ -402,7 +424,7 @@ func (t *Trie) resolve(n node, prefix []byte) (node, error) {
 
 func (t *Trie) resolveHash(n hashNode, prefix []byte) (node, error) {
 	hash := common.BytesToHash(n)
-	if node := t.db.node(hash); node != nil {
+	if node := t.db.node(hash, t.prefix); node != nil {
 		return node, nil
 	}
 	return nil, &MissingNodeError{NodeHash: hash, Path: prefix}

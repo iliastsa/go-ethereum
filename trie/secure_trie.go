@@ -62,6 +62,17 @@ func NewSecure(root common.Hash, db *Database) (*SecureTrie, error) {
 	return &SecureTrie{trie: *trie}, nil
 }
 
+func NewSecureStorage(root common.Hash, addr common.Hash, db *Database) (*SecureTrie, error) {
+	if db == nil {
+		panic("trie.NewSecure called without a database")
+	}
+	trie, err := NewWithPrefix(root, addr[:4], db)
+	if err != nil {
+		return nil, err
+	}
+	return &SecureTrie{trie: *trie}, nil
+}
+
 // Get returns the value for key stored in the trie.
 // The value bytes must not be modified by the caller.
 func (t *SecureTrie) Get(key []byte) []byte {
