@@ -146,6 +146,8 @@ type cachedNode struct {
 	parents  uint32                 // Number of live nodes referencing this one
 	children map[common.Hash]uint16 // External children referenced by this node
 
+	owners map[[4]byte]bool // The set of prefixes that make this node
+
 	flushPrev common.Hash // Previous node in the flush-list
 	flushNext common.Hash // Next node in the flush-list
 }
@@ -370,7 +372,7 @@ func (db *Database) node(hash common.Hash, prefix []byte) node {
 
 	// Retrieve the node from the clean cache if available
 	if db.cleans != nil {
-		if enc := db.cleans.Get(nil, key); enc != nil {
+		if enc := db.cleans.Get(nil, hash[:]); enc != nil {
 			memcacheCleanHitMeter.Mark(1)
 			memcacheCleanReadMeter.Mark(int64(len(enc)))
 			return mustDecodeNode(hash[:], enc)
@@ -790,9 +792,20 @@ func (db *Database) commit(hash common.Hash, batch ethdb.Batch, uncacher *cleane
 	if err != nil {
 		return err
 	}
-	if err := batch.Put(hash[:], node.rlp()); err != nil {
-		return err
+
+	key := make([]byte, 4+len(hash))
+
+	// We write each node for each "owner", to improve locality. The idea is that trie nodes (internal or leaf/value
+	// nodes are placed closed to each other)
+	for owner := range node.owners {
+		copy(key, owner[:])
+		copy(key[4:], hash[:])
+
+		if err := batch.Put(key, node.rlp()); err != nil {
+			return err
+		}
 	}
+
 	// If we've reached an optimal batch size, commit and start over
 	if batch.ValueSize() >= ethdb.IdealBatchSize {
 		if err := batch.Write(); err != nil {
