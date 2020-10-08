@@ -146,7 +146,7 @@ type cachedNode struct {
 	parents  uint32                 // Number of live nodes referencing this one
 	children map[common.Hash]uint16 // External children referenced by this node
 
-	owners map[[4]byte]bool // The set of prefixes that make this node
+	owners map[[4]byte]struct{} // The set of prefixes that make this node
 
 	flushPrev common.Hash // Previous node in the flush-list
 	flushNext common.Hash // Next node in the flush-list
@@ -313,14 +313,15 @@ func (db *Database) InsertBlob(hash common.Hash, blob []byte) {
 	db.lock.Lock()
 	defer db.lock.Unlock()
 
-	db.insert(hash, len(blob), rawNode(blob))
+	// TODO: Is it ok to pass an empty slice here?
+	db.insert(hash, len(blob), rawNode(blob), []byte{})
 }
 
 // insert inserts a collapsed trie node into the memory database. This method is
 // a more generic version of InsertBlob, supporting both raw blob insertions as
 // well ex trie node insertions. The blob size must be specified to allow proper
 // size tracking.
-func (db *Database) insert(hash common.Hash, size int, node node) {
+func (db *Database) insert(hash common.Hash, size int, node node, prefix []byte) {
 	// If the node's already cached, skip
 	if _, ok := db.dirties[hash]; ok {
 		return
@@ -333,6 +334,14 @@ func (db *Database) insert(hash common.Hash, size int, node node) {
 		size:      uint16(size),
 		flushPrev: db.newest,
 	}
+
+	if len(prefix) == 4 {
+		var addr_prefix [4]byte
+		copy(addr_prefix[:], prefix)
+
+		entry.owners[addr_prefix] = struct{}{}
+	}
+
 	entry.forChilds(func(child common.Hash) {
 		if c := db.dirties[child]; c != nil {
 			c.parents++

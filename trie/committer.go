@@ -51,6 +51,8 @@ type committer struct {
 
 	onleaf LeafCallback
 	leafCh chan *leaf
+
+	prefix []byte
 }
 
 // committers live in a global sync.Pool
@@ -205,7 +207,7 @@ func (c *committer) store(n node, db *Database, force bool, hasVnodeChildren boo
 		// No leaf-callback used, but there's still a database. Do serial
 		// insertion
 		db.lock.Lock()
-		db.insert(common.BytesToHash(hash), size, n)
+		db.insert(common.BytesToHash(hash), size, n, c.prefix)
 		db.lock.Unlock()
 	}
 	return hash
@@ -222,7 +224,7 @@ func (c *committer) commitLoop(db *Database) {
 		)
 		// We are pooling the trie nodes into an intermediate memory cache
 		db.lock.Lock()
-		db.insert(hash, size, n)
+		db.insert(hash, size, n, c.prefix)
 		db.lock.Unlock()
 		if c.onleaf != nil && hasVnodes {
 			switch n := n.(type) {

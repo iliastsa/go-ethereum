@@ -449,6 +449,9 @@ func (t *Trie) Commit(onleaf LeafCallback) (root common.Hash, err error) {
 	}
 	rootHash := t.Hash()
 	h := newCommitter()
+
+	h.prefix = t.prefix
+
 	defer returnCommitterToPool(h)
 	// Do a quick check if we really need to commit, before we spin
 	// up goroutines. This can happen e.g. if we load a trie for reading storage
