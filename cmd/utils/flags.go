@@ -19,7 +19,6 @@ package utils
 
 import (
 	"crypto/ecdsa"
-	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -40,6 +39,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/clique"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/eth"
@@ -48,6 +48,8 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/ethstats"
 	"github.com/ethereum/go-ethereum/graphql"
+	"github.com/ethereum/go-ethereum/internal/ethapi"
+	"github.com/ethereum/go-ethereum/internal/flags"
 	"github.com/ethereum/go-ethereum/les"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
@@ -61,34 +63,8 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/nat"
 	"github.com/ethereum/go-ethereum/p2p/netutil"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/ethereum/go-ethereum/rpc"
-	whisper "github.com/ethereum/go-ethereum/whisper/whisperv6"
 	pcsclite "github.com/gballet/go-libpcsclite"
 	cli "gopkg.in/urfave/cli.v1"
-)
-
-var (
-	CommandHelpTemplate = `{{.cmd.Name}}{{if .cmd.Subcommands}} command{{end}}{{if .cmd.Flags}} [command options]{{end}} [arguments...]
-{{if .cmd.Description}}{{.cmd.Description}}
-{{end}}{{if .cmd.Subcommands}}
-SUBCOMMANDS:
-  {{range .cmd.Subcommands}}{{.Name}}{{with .ShortName}}, {{.}}{{end}}{{ "\t" }}{{.Usage}}
-  {{end}}{{end}}{{if .categorizedFlags}}
-{{range $idx, $categorized := .categorizedFlags}}{{$categorized.Name}} OPTIONS:
-{{range $categorized.Flags}}{{"\t"}}{{.}}
-{{end}}
-{{end}}{{end}}`
-
-	OriginCommandHelpTemplate = `{{.Name}}{{if .Subcommands}} command{{end}}{{if .Flags}} [command options]{{end}} [arguments...]
-{{if .Description}}{{.Description}}
-{{end}}{{if .Subcommands}}
-SUBCOMMANDS:
-  {{range .Subcommands}}{{.Name}}{{with .ShortName}}, {{.}}{{end}}{{ "\t" }}{{.Usage}}
-  {{end}}{{end}}{{if .Flags}}
-OPTIONS:
-{{range $.Flags}}   {{.}}
-{{end}}
-{{end}}`
 )
 
 func init() {
@@ -104,19 +80,8 @@ GLOBAL OPTIONS:
    {{range .Flags}}{{.}}
    {{end}}{{end}}
 `
-	cli.CommandHelpTemplate = CommandHelpTemplate
+	cli.CommandHelpTemplate = flags.CommandHelpTemplate
 	cli.HelpPrinter = printHelp
-}
-
-// NewApp creates an app with sane defaults.
-func NewApp(gitCommit, gitDate, usage string) *cli.App {
-	app := cli.NewApp()
-	app.Name = filepath.Base(os.Args[0])
-	app.Author = ""
-	app.Email = ""
-	app.Version = params.VersionWithCommit(gitCommit, gitDate)
-	app.Usage = usage
-	return app
 }
 
 func printHelp(out io.Writer, templ string, data interface{}) {
@@ -163,7 +128,7 @@ var (
 	}
 	NetworkIdFlag = cli.Uint64Flag{
 		Name:  "networkid",
-		Usage: "Network identifier (integer, 1=Frontier, 3=Ropsten, 4=Rinkeby, 5=Görli)",
+		Usage: "Explicitly set network id (integer)(For testnets: use --ropsten, --rinkeby, --goerli instead)",
 		Value: eth.DefaultConfig.NetworkId,
 	}
 	GoerliFlag = cli.BoolFlag{
@@ -197,7 +162,7 @@ var (
 	DocRootFlag = DirectoryFlag{
 		Name:  "docroot",
 		Usage: "Document Root for HTTPClient file scheme",
-		Value: DirectoryString(homeDir()),
+		Value: DirectoryString(HomeDir()),
 	}
 	ExitWhenSyncedFlag = cli.BoolFlag{
 		Name:  "exitwhensynced",
@@ -281,6 +246,10 @@ var (
 	UltraLightOnlyAnnounceFlag = cli.BoolFlag{
 		Name:  "ulc.onlyannounce",
 		Usage: "Ultra light server sends announcements only",
+	}
+	LightNoPruneFlag = cli.BoolFlag{
+		Name:  "light.nopruning",
+		Usage: "Disable ancient light chain data pruning",
 	}
 	// Ethash settings
 	EthashCacheDirFlag = DirectoryFlag{
@@ -389,6 +358,16 @@ var (
 		Name:  "cache.trie",
 		Usage: "Percentage of cache memory allowance to use for trie caching (default = 15% full mode, 30% archive mode)",
 		Value: 15,
+	}
+	CacheTrieJournalFlag = cli.StringFlag{
+		Name:  "cache.trie.journal",
+		Usage: "Disk journal directory for trie cache to survive node restarts",
+		Value: eth.DefaultConfig.TrieCleanCacheJournal,
+	}
+	CacheTrieRejournalFlag = cli.DurationFlag{
+		Name:  "cache.trie.rejournal",
+		Usage: "Time interval to regenerate the trie cache journal",
+		Value: eth.DefaultConfig.TrieCleanCacheRejournal,
 	}
 	CacheGCFlag = cli.IntFlag{
 		Name:  "cache.gc",
@@ -536,6 +515,20 @@ var (
 		Usage: "API's offered over the HTTP-RPC interface",
 		Value: "",
 	}
+	GraphQLEnabledFlag = cli.BoolFlag{
+		Name:  "graphql",
+		Usage: "Enable GraphQL on the HTTP-RPC server. Note that GraphQL can only be started if an HTTP server is started as well.",
+	}
+	GraphQLCORSDomainFlag = cli.StringFlag{
+		Name:  "graphql.corsdomain",
+		Usage: "Comma separated list of domains from which to accept cross origin requests (browser enforced)",
+		Value: "",
+	}
+	GraphQLVirtualHostsFlag = cli.StringFlag{
+		Name:  "graphql.vhosts",
+		Usage: "Comma separated list of virtual hostnames from which to accept requests (server enforced). Accepts '*' wildcard.",
+		Value: strings.Join(node.DefaultConfig.GraphQLVirtualHosts, ","),
+	}
 	WSEnabledFlag = cli.BoolFlag{
 		Name:  "ws",
 		Usage: "Enable the WS-RPC server",
@@ -559,30 +552,6 @@ var (
 		Name:  "ws.origins",
 		Usage: "Origins from which to accept websockets requests",
 		Value: "",
-	}
-	GraphQLEnabledFlag = cli.BoolFlag{
-		Name:  "graphql",
-		Usage: "Enable the GraphQL server",
-	}
-	GraphQLListenAddrFlag = cli.StringFlag{
-		Name:  "graphql.addr",
-		Usage: "GraphQL server listening interface",
-		Value: node.DefaultGraphQLHost,
-	}
-	GraphQLPortFlag = cli.IntFlag{
-		Name:  "graphql.port",
-		Usage: "GraphQL server listening port",
-		Value: node.DefaultGraphQLPort,
-	}
-	GraphQLCORSDomainFlag = cli.StringFlag{
-		Name:  "graphql.corsdomain",
-		Usage: "Comma separated list of domains from which to accept cross origin requests (browser enforced)",
-		Value: "",
-	}
-	GraphQLVirtualHostsFlag = cli.StringFlag{
-		Name:  "graphql.vhosts",
-		Usage: "Comma separated list of virtual hostnames from which to accept requests (server enforced). Accepts '*' wildcard.",
-		Value: strings.Join(node.DefaultConfig.GraphQLVirtualHosts, ","),
 	}
 	ExecFlag = cli.StringFlag{
 		Name:  "exec",
@@ -662,6 +631,11 @@ var (
 		Usage: "Suggested gas price is the given percentile of a set of recent transaction gas prices",
 		Value: eth.DefaultConfig.GPO.Percentile,
 	}
+	GpoMaxGasPriceFlag = cli.Int64Flag{
+		Name:  "gpo.maxprice",
+		Usage: "Maximum gas price will be recommended by gpo",
+		Value: eth.DefaultConfig.GPO.MaxPrice.Int64(),
+	}
 	WhisperEnabledFlag = cli.BoolFlag{
 		Name:  "shh",
 		Usage: "Enable Whisper",
@@ -669,12 +643,12 @@ var (
 	WhisperMaxMessageSizeFlag = cli.IntFlag{
 		Name:  "shh.maxmessagesize",
 		Usage: "Max message size accepted",
-		Value: int(whisper.DefaultMaxMessageSize),
+		Value: 1024 * 1024,
 	}
 	WhisperMinPOWFlag = cli.Float64Flag{
 		Name:  "shh.pow",
 		Usage: "Minimum POW accepted",
-		Value: whisper.DefaultMinimumPoW,
+		Value: 0.2,
 	}
 	WhisperRestrictConnectionBetweenLightClientsFlag = cli.BoolFlag{
 		Name:  "shh.restrict-light",
@@ -819,9 +793,9 @@ func setBootstrapNodes(ctx *cli.Context, cfg *p2p.Config) {
 	switch {
 	case ctx.GlobalIsSet(BootnodesFlag.Name) || ctx.GlobalIsSet(LegacyBootnodesV4Flag.Name):
 		if ctx.GlobalIsSet(LegacyBootnodesV4Flag.Name) {
-			urls = splitAndTrim(ctx.GlobalString(LegacyBootnodesV4Flag.Name))
+			urls = SplitAndTrim(ctx.GlobalString(LegacyBootnodesV4Flag.Name))
 		} else {
-			urls = splitAndTrim(ctx.GlobalString(BootnodesFlag.Name))
+			urls = SplitAndTrim(ctx.GlobalString(BootnodesFlag.Name))
 		}
 	case ctx.GlobalBool(LegacyTestnetFlag.Name) || ctx.GlobalBool(RopstenFlag.Name):
 		urls = params.RopstenBootnodes
@@ -855,9 +829,9 @@ func setBootstrapNodesV5(ctx *cli.Context, cfg *p2p.Config) {
 	switch {
 	case ctx.GlobalIsSet(BootnodesFlag.Name) || ctx.GlobalIsSet(LegacyBootnodesV5Flag.Name):
 		if ctx.GlobalIsSet(LegacyBootnodesV5Flag.Name) {
-			urls = splitAndTrim(ctx.GlobalString(LegacyBootnodesV5Flag.Name))
+			urls = SplitAndTrim(ctx.GlobalString(LegacyBootnodesV5Flag.Name))
 		} else {
-			urls = splitAndTrim(ctx.GlobalString(BootnodesFlag.Name))
+			urls = SplitAndTrim(ctx.GlobalString(BootnodesFlag.Name))
 		}
 	case ctx.GlobalBool(RopstenFlag.Name):
 		urls = params.RopstenBootnodes
@@ -903,13 +877,12 @@ func setNAT(ctx *cli.Context, cfg *p2p.Config) {
 	}
 }
 
-// splitAndTrim splits input separated by a comma
+// SplitAndTrim splits input separated by a comma
 // and trims excessive white space from the substrings.
-func splitAndTrim(input string) (ret []string) {
+func SplitAndTrim(input string) (ret []string) {
 	l := strings.Split(input, ",")
 	for _, r := range l {
-		r = strings.TrimSpace(r)
-		if len(r) > 0 {
+		if r = strings.TrimSpace(r); r != "" {
 			ret = append(ret, r)
 		}
 	}
@@ -943,45 +916,38 @@ func setHTTP(ctx *cli.Context, cfg *node.Config) {
 	}
 
 	if ctx.GlobalIsSet(LegacyRPCCORSDomainFlag.Name) {
-		cfg.HTTPCors = splitAndTrim(ctx.GlobalString(LegacyRPCCORSDomainFlag.Name))
+		cfg.HTTPCors = SplitAndTrim(ctx.GlobalString(LegacyRPCCORSDomainFlag.Name))
 		log.Warn("The flag --rpccorsdomain is deprecated and will be removed in the future, please use --http.corsdomain")
 	}
 	if ctx.GlobalIsSet(HTTPCORSDomainFlag.Name) {
-		cfg.HTTPCors = splitAndTrim(ctx.GlobalString(HTTPCORSDomainFlag.Name))
+		cfg.HTTPCors = SplitAndTrim(ctx.GlobalString(HTTPCORSDomainFlag.Name))
 	}
 
 	if ctx.GlobalIsSet(LegacyRPCApiFlag.Name) {
-		cfg.HTTPModules = splitAndTrim(ctx.GlobalString(LegacyRPCApiFlag.Name))
+		cfg.HTTPModules = SplitAndTrim(ctx.GlobalString(LegacyRPCApiFlag.Name))
 		log.Warn("The flag --rpcapi is deprecated and will be removed in the future, please use --http.api")
 	}
 	if ctx.GlobalIsSet(HTTPApiFlag.Name) {
-		cfg.HTTPModules = splitAndTrim(ctx.GlobalString(HTTPApiFlag.Name))
+		cfg.HTTPModules = SplitAndTrim(ctx.GlobalString(HTTPApiFlag.Name))
 	}
 
 	if ctx.GlobalIsSet(LegacyRPCVirtualHostsFlag.Name) {
-		cfg.HTTPVirtualHosts = splitAndTrim(ctx.GlobalString(LegacyRPCVirtualHostsFlag.Name))
+		cfg.HTTPVirtualHosts = SplitAndTrim(ctx.GlobalString(LegacyRPCVirtualHostsFlag.Name))
 		log.Warn("The flag --rpcvhosts is deprecated and will be removed in the future, please use --http.vhosts")
 	}
 	if ctx.GlobalIsSet(HTTPVirtualHostsFlag.Name) {
-		cfg.HTTPVirtualHosts = splitAndTrim(ctx.GlobalString(HTTPVirtualHostsFlag.Name))
+		cfg.HTTPVirtualHosts = SplitAndTrim(ctx.GlobalString(HTTPVirtualHostsFlag.Name))
 	}
 }
 
 // setGraphQL creates the GraphQL listener interface string from the set
 // command line flags, returning empty if the GraphQL endpoint is disabled.
 func setGraphQL(ctx *cli.Context, cfg *node.Config) {
-	if ctx.GlobalBool(GraphQLEnabledFlag.Name) && cfg.GraphQLHost == "" {
-		cfg.GraphQLHost = "127.0.0.1"
-		if ctx.GlobalIsSet(GraphQLListenAddrFlag.Name) {
-			cfg.GraphQLHost = ctx.GlobalString(GraphQLListenAddrFlag.Name)
-		}
-	}
-	cfg.GraphQLPort = ctx.GlobalInt(GraphQLPortFlag.Name)
 	if ctx.GlobalIsSet(GraphQLCORSDomainFlag.Name) {
-		cfg.GraphQLCors = splitAndTrim(ctx.GlobalString(GraphQLCORSDomainFlag.Name))
+		cfg.GraphQLCors = SplitAndTrim(ctx.GlobalString(GraphQLCORSDomainFlag.Name))
 	}
 	if ctx.GlobalIsSet(GraphQLVirtualHostsFlag.Name) {
-		cfg.GraphQLVirtualHosts = splitAndTrim(ctx.GlobalString(GraphQLVirtualHostsFlag.Name))
+		cfg.GraphQLVirtualHosts = SplitAndTrim(ctx.GlobalString(GraphQLVirtualHostsFlag.Name))
 	}
 }
 
@@ -1007,19 +973,19 @@ func setWS(ctx *cli.Context, cfg *node.Config) {
 	}
 
 	if ctx.GlobalIsSet(LegacyWSAllowedOriginsFlag.Name) {
-		cfg.WSOrigins = splitAndTrim(ctx.GlobalString(LegacyWSAllowedOriginsFlag.Name))
+		cfg.WSOrigins = SplitAndTrim(ctx.GlobalString(LegacyWSAllowedOriginsFlag.Name))
 		log.Warn("The flag --wsorigins is deprecated and will be removed in the future, please use --ws.origins")
 	}
 	if ctx.GlobalIsSet(WSAllowedOriginsFlag.Name) {
-		cfg.WSOrigins = splitAndTrim(ctx.GlobalString(WSAllowedOriginsFlag.Name))
+		cfg.WSOrigins = SplitAndTrim(ctx.GlobalString(WSAllowedOriginsFlag.Name))
 	}
 
 	if ctx.GlobalIsSet(LegacyWSApiFlag.Name) {
-		cfg.WSModules = splitAndTrim(ctx.GlobalString(LegacyWSApiFlag.Name))
+		cfg.WSModules = SplitAndTrim(ctx.GlobalString(LegacyWSApiFlag.Name))
 		log.Warn("The flag --wsapi is deprecated and will be removed in the future, please use --ws.api")
 	}
 	if ctx.GlobalIsSet(WSApiFlag.Name) {
-		cfg.WSModules = splitAndTrim(ctx.GlobalString(WSApiFlag.Name))
+		cfg.WSModules = SplitAndTrim(ctx.GlobalString(WSApiFlag.Name))
 	}
 }
 
@@ -1069,6 +1035,9 @@ func setLes(ctx *cli.Context, cfg *eth.Config) {
 	}
 	if ctx.GlobalIsSet(UltraLightOnlyAnnounceFlag.Name) {
 		cfg.UltraLightOnlyAnnounce = ctx.GlobalBool(UltraLightOnlyAnnounceFlag.Name)
+	}
+	if ctx.GlobalIsSet(LightNoPruneFlag.Name) {
+		cfg.LightNoPrune = ctx.GlobalBool(LightNoPruneFlag.Name)
 	}
 }
 
@@ -1326,6 +1295,9 @@ func setGPO(ctx *cli.Context, cfg *gasprice.Config, light bool) {
 	if ctx.GlobalIsSet(GpoPercentileFlag.Name) {
 		cfg.Percentile = ctx.GlobalInt(GpoPercentileFlag.Name)
 	}
+	if ctx.GlobalIsSet(GpoMaxGasPriceFlag.Name) {
+		cfg.MaxPrice = big.NewInt(ctx.GlobalInt64(GpoMaxGasPriceFlag.Name))
+	}
 }
 
 func setTxPool(ctx *cli.Context, cfg *core.TxPoolConfig) {
@@ -1499,15 +1471,12 @@ func CheckExclusive(ctx *cli.Context, args ...interface{}) {
 }
 
 // SetShhConfig applies shh-related command line flags to the config.
-func SetShhConfig(ctx *cli.Context, stack *node.Node, cfg *whisper.Config) {
-	if ctx.GlobalIsSet(WhisperMaxMessageSizeFlag.Name) {
-		cfg.MaxMessageSize = uint32(ctx.GlobalUint(WhisperMaxMessageSizeFlag.Name))
-	}
-	if ctx.GlobalIsSet(WhisperMinPOWFlag.Name) {
-		cfg.MinimumAcceptedPOW = ctx.GlobalFloat64(WhisperMinPOWFlag.Name)
-	}
-	if ctx.GlobalIsSet(WhisperRestrictConnectionBetweenLightClientsFlag.Name) {
-		cfg.RestrictConnectionBetweenLightClients = true
+func SetShhConfig(ctx *cli.Context, stack *node.Node) {
+	if ctx.GlobalIsSet(WhisperEnabledFlag.Name) ||
+		ctx.GlobalIsSet(WhisperMaxMessageSizeFlag.Name) ||
+		ctx.GlobalIsSet(WhisperMinPOWFlag.Name) ||
+		ctx.GlobalIsSet(WhisperRestrictConnectionBetweenLightClientsFlag.Name) {
+		log.Warn("Whisper support has been deprecated and the code has been moved to github.com/ethereum/whisper")
 	}
 }
 
@@ -1563,6 +1532,12 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *eth.Config) {
 	if ctx.GlobalIsSet(CacheFlag.Name) || ctx.GlobalIsSet(CacheTrieFlag.Name) {
 		cfg.TrieCleanCache = ctx.GlobalInt(CacheFlag.Name) * ctx.GlobalInt(CacheTrieFlag.Name) / 100
 	}
+	if ctx.GlobalIsSet(CacheTrieJournalFlag.Name) {
+		cfg.TrieCleanCacheJournal = ctx.GlobalString(CacheTrieJournalFlag.Name)
+	}
+	if ctx.GlobalIsSet(CacheTrieRejournalFlag.Name) {
+		cfg.TrieCleanCacheRejournal = ctx.GlobalDuration(CacheTrieRejournalFlag.Name)
+	}
 	if ctx.GlobalIsSet(CacheFlag.Name) || ctx.GlobalIsSet(CacheGCFlag.Name) {
 		cfg.TrieDirtyCache = ctx.GlobalInt(CacheFlag.Name) * ctx.GlobalInt(CacheGCFlag.Name) / 100
 	}
@@ -1570,6 +1545,7 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *eth.Config) {
 		cfg.SnapshotCache = ctx.GlobalInt(CacheFlag.Name) * ctx.GlobalInt(CacheSnapshotFlag.Name) / 100
 	}
 	if !ctx.GlobalIsSet(SnapshotFlag.Name) {
+		cfg.TrieCleanCache += cfg.SnapshotCache
 		cfg.SnapshotCache = 0 // Disabled
 	}
 	if ctx.GlobalIsSet(DocRootFlag.Name) {
@@ -1603,7 +1579,7 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *eth.Config) {
 		if urls == "" {
 			cfg.DiscoveryURLs = []string{}
 		} else {
-			cfg.DiscoveryURLs = splitAndTrim(urls)
+			cfg.DiscoveryURLs = SplitAndTrim(urls)
 		}
 	}
 
@@ -1614,19 +1590,19 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *eth.Config) {
 			cfg.NetworkId = 3
 		}
 		cfg.Genesis = core.DefaultRopstenGenesisBlock()
-		setDNSDiscoveryDefaults(cfg, params.RopstenGenesisHash)
+		SetDNSDiscoveryDefaults(cfg, params.RopstenGenesisHash)
 	case ctx.GlobalBool(RinkebyFlag.Name):
 		if !ctx.GlobalIsSet(NetworkIdFlag.Name) {
 			cfg.NetworkId = 4
 		}
 		cfg.Genesis = core.DefaultRinkebyGenesisBlock()
-		setDNSDiscoveryDefaults(cfg, params.RinkebyGenesisHash)
+		SetDNSDiscoveryDefaults(cfg, params.RinkebyGenesisHash)
 	case ctx.GlobalBool(GoerliFlag.Name):
 		if !ctx.GlobalIsSet(NetworkIdFlag.Name) {
 			cfg.NetworkId = 5
 		}
 		cfg.Genesis = core.DefaultGoerliGenesisBlock()
-		setDNSDiscoveryDefaults(cfg, params.GoerliGenesisHash)
+		SetDNSDiscoveryDefaults(cfg, params.GoerliGenesisHash)
 	case ctx.GlobalBool(YoloV1Flag.Name):
 		if !ctx.GlobalIsSet(NetworkIdFlag.Name) {
 			cfg.NetworkId = 133519467574833 // "yolov1"
@@ -1638,36 +1614,56 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *eth.Config) {
 		}
 		// Create new developer account or reuse existing one
 		var (
-			developer accounts.Account
-			err       error
+			developer  accounts.Account
+			passphrase string
+			err        error
 		)
-		if accs := ks.Accounts(); len(accs) > 0 {
+		if list := MakePasswordList(ctx); len(list) > 0 {
+			// Just take the first value. Although the function returns a possible multiple values and
+			// some usages iterate through them as attempts, that doesn't make sense in this setting,
+			// when we're definitely concerned with only one account.
+			passphrase = list[0]
+		}
+		// setEtherbase has been called above, configuring the miner address from command line flags.
+		if cfg.Miner.Etherbase != (common.Address{}) {
+			developer = accounts.Account{Address: cfg.Miner.Etherbase}
+		} else if accs := ks.Accounts(); len(accs) > 0 {
 			developer = ks.Accounts()[0]
 		} else {
-			developer, err = ks.NewAccount("")
+			developer, err = ks.NewAccount(passphrase)
 			if err != nil {
 				Fatalf("Failed to create developer account: %v", err)
 			}
 		}
-		if err := ks.Unlock(developer, ""); err != nil {
+		if err := ks.Unlock(developer, passphrase); err != nil {
 			Fatalf("Failed to unlock developer account: %v", err)
 		}
 		log.Info("Using developer account", "address", developer.Address)
 
+		// Create a new developer genesis block or reuse existing one
 		cfg.Genesis = core.DeveloperGenesisBlock(uint64(ctx.GlobalInt(DeveloperPeriodFlag.Name)), developer.Address)
+		if ctx.GlobalIsSet(DataDirFlag.Name) {
+			// Check if we have an already initialized chain and fall back to
+			// that if so. Otherwise we need to generate a new genesis spec.
+			chaindb := MakeChainDatabase(ctx, stack)
+			if rawdb.ReadCanonicalHash(chaindb, 0) != (common.Hash{}) {
+				cfg.Genesis = nil // fallback to db content
+			}
+			chaindb.Close()
+		}
 		if !ctx.GlobalIsSet(MinerGasPriceFlag.Name) && !ctx.GlobalIsSet(LegacyMinerGasPriceFlag.Name) {
 			cfg.Miner.GasPrice = big.NewInt(1)
 		}
 	default:
 		if cfg.NetworkId == 1 {
-			setDNSDiscoveryDefaults(cfg, params.MainnetGenesisHash)
+			SetDNSDiscoveryDefaults(cfg, params.MainnetGenesisHash)
 		}
 	}
 }
 
-// setDNSDiscoveryDefaults configures DNS discovery with the given URL if
+// SetDNSDiscoveryDefaults configures DNS discovery with the given URL if
 // no URLs are set.
-func setDNSDiscoveryDefaults(cfg *eth.Config, genesis common.Hash) {
+func SetDNSDiscoveryDefaults(cfg *eth.Config, genesis common.Hash) {
 	if cfg.DiscoveryURLs != nil {
 		return // already set through flags/config
 	}
@@ -1682,70 +1678,39 @@ func setDNSDiscoveryDefaults(cfg *eth.Config, genesis common.Hash) {
 }
 
 // RegisterEthService adds an Ethereum client to the stack.
-func RegisterEthService(stack *node.Node, cfg *eth.Config) {
-	var err error
+func RegisterEthService(stack *node.Node, cfg *eth.Config) ethapi.Backend {
 	if cfg.SyncMode == downloader.LightSync {
-		err = stack.Register(func(ctx *node.ServiceContext) (node.Service, error) {
-			return les.New(ctx, cfg)
-		})
+		backend, err := les.New(stack, cfg)
+		if err != nil {
+			Fatalf("Failed to register the Ethereum service: %v", err)
+		}
+		return backend.ApiBackend
 	} else {
-		err = stack.Register(func(ctx *node.ServiceContext) (node.Service, error) {
-			fullNode, err := eth.New(ctx, cfg)
-			if fullNode != nil && cfg.LightServ > 0 {
-				ls, _ := les.NewLesServer(fullNode, cfg)
-				fullNode.AddLesServer(ls)
+		backend, err := eth.New(stack, cfg)
+		if err != nil {
+			Fatalf("Failed to register the Ethereum service: %v", err)
+		}
+		if cfg.LightServ > 0 {
+			_, err := les.NewLesServer(stack, backend, cfg)
+			if err != nil {
+				Fatalf("Failed to create the LES server: %v", err)
 			}
-			return fullNode, err
-		})
-	}
-	if err != nil {
-		Fatalf("Failed to register the Ethereum service: %v", err)
-	}
-}
-
-// RegisterShhService configures Whisper and adds it to the given node.
-func RegisterShhService(stack *node.Node, cfg *whisper.Config) {
-	if err := stack.Register(func(n *node.ServiceContext) (node.Service, error) {
-		return whisper.New(cfg), nil
-	}); err != nil {
-		Fatalf("Failed to register the Whisper service: %v", err)
+		}
+		return backend.APIBackend
 	}
 }
 
 // RegisterEthStatsService configures the Ethereum Stats daemon and adds it to
 // the given node.
-func RegisterEthStatsService(stack *node.Node, url string) {
-	if err := stack.Register(func(ctx *node.ServiceContext) (node.Service, error) {
-		// Retrieve both eth and les services
-		var ethServ *eth.Ethereum
-		ctx.Service(&ethServ)
-
-		var lesServ *les.LightEthereum
-		ctx.Service(&lesServ)
-
-		// Let ethstats use whichever is not nil
-		return ethstats.New(url, ethServ, lesServ)
-	}); err != nil {
+func RegisterEthStatsService(stack *node.Node, backend ethapi.Backend, url string) {
+	if err := ethstats.New(stack, backend, backend.Engine(), url); err != nil {
 		Fatalf("Failed to register the Ethereum Stats service: %v", err)
 	}
 }
 
 // RegisterGraphQLService is a utility function to construct a new service and register it against a node.
-func RegisterGraphQLService(stack *node.Node, endpoint string, cors, vhosts []string, timeouts rpc.HTTPTimeouts) {
-	if err := stack.Register(func(ctx *node.ServiceContext) (node.Service, error) {
-		// Try to construct the GraphQL service backed by a full node
-		var ethServ *eth.Ethereum
-		if err := ctx.Service(&ethServ); err == nil {
-			return graphql.New(ethServ.APIBackend, endpoint, cors, vhosts, timeouts)
-		}
-		// Try to construct the GraphQL service backed by a light node
-		var lesServ *les.LightEthereum
-		if err := ctx.Service(&lesServ); err == nil {
-			return graphql.New(lesServ.ApiBackend, endpoint, cors, vhosts, timeouts)
-		}
-		// Well, this should not have happened, bail out
-		return nil, errors.New("no Ethereum service")
-	}); err != nil {
+func RegisterGraphQLService(stack *node.Node, backend ethapi.Backend, cfg node.Config) {
+	if err := graphql.New(stack, backend, cfg.GraphQLCors, cfg.GraphQLVirtualHosts); err != nil {
 		Fatalf("Failed to register the GraphQL service: %v", err)
 	}
 }
@@ -1800,12 +1765,17 @@ func MakeChainDatabase(ctx *cli.Context, stack *node.Node) ethdb.Database {
 	var (
 		cache   = ctx.GlobalInt(CacheFlag.Name) * ctx.GlobalInt(CacheDatabaseFlag.Name) / 100
 		handles = makeDatabaseHandles()
+
+		err     error
+		chainDb ethdb.Database
 	)
-	name := "chaindata"
 	if ctx.GlobalString(SyncModeFlag.Name) == "light" {
-		name = "lightchaindata"
+		name := "lightchaindata"
+		chainDb, err = stack.OpenDatabase(name, cache, handles, "")
+	} else {
+		name := "chaindata"
+		chainDb, err = stack.OpenDatabaseWithFreezer(name, cache, handles, ctx.GlobalString(AncientFlag.Name), "")
 	}
-	chainDb, err := stack.OpenDatabaseWithFreezer(name, cache, handles, ctx.GlobalString(AncientFlag.Name), "")
 	if err != nil {
 		Fatalf("Could not open database: %v", err)
 	}
