@@ -365,11 +365,6 @@ func (db *Database) insertPreimage(hash common.Hash, preimage []byte) {
 // node retrieves a cached trie node from memory, or returns nil if none can be
 // found in the memory cache.
 func (db *Database) node(hash common.Hash, prefix []byte) node {
-	key := make([]byte, len(prefix)+len(hash))
-
-	copy(key, prefix)
-	copy(key[len(prefix):], hash[:])
-
 	// Retrieve the node from the clean cache if available
 	if db.cleans != nil {
 		if enc := db.cleans.Get(nil, hash[:]); enc != nil {
@@ -391,21 +386,26 @@ func (db *Database) node(hash common.Hash, prefix []byte) node {
 	memcacheDirtyMissMeter.Mark(1)
 
 	// Content unavailable in memory, attempt to retrieve from disk
-	enc, err := db.diskdb.Get(key)
-	if err != nil || enc == nil {
-		return nil
+	enc := rawdb.ReadTrieNodeWithPrefix(db.diskdb, hash, prefix)
+
+	if len(enc) != 0 {
+		if db.cleans != nil {
+			db.cleans.Set(hash[:], enc)
+			memcacheCleanMissMeter.Mark(1)
+			memcacheCleanWriteMeter.Mark(int64(len(enc)))
+		}
+		return mustDecodeNode(hash[:], enc)
 	}
-	if db.cleans != nil {
-		db.cleans.Set(hash[:], enc)
-		memcacheCleanMissMeter.Mark(1)
-		memcacheCleanWriteMeter.Mark(int64(len(enc)))
-	}
-	return mustDecodeNode(hash[:], enc)
+
+	return nil
 }
 
 // Node retrieves an encoded cached trie node from memory. If it cannot be found
 // cached, the method queries the persistent database for the content.
 func (db *Database) Node(hash common.Hash) ([]byte, error) {
+	// TODO: This is public version is used in unit tests and in the GetNodeData p2p API.
+	//       Check this again.
+
 	// It doesn't make sense to retrieve the metaroot
 	if hash == (common.Hash{}) {
 		return nil, errors.New("not found")
@@ -761,15 +761,10 @@ func (db *Database) commit(hash common.Hash, batch ethdb.Batch, uncacher *cleane
 		return err
 	}
 
-	key := make([]byte, 4+len(hash))
-
 	// We write each node for each "owner", to improve locality. The idea is that trie nodes (internal or leaf/value
 	// nodes are placed closed to each other)
 	for owner := range node.owners {
-		copy(key, owner[:])
-		copy(key[4:], hash[:])
-
-		rawdb.WriteTrieNode(batch, key, node.rlp())
+		rawdb.WriteTrieNodeWithPrefix(batch, hash, node.rlp(), owner[:])
 	}
 
 	// TODO: Check this

@@ -22,6 +22,14 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 )
 
+func createPrefixKey(hash common.Hash, prefix []byte) []byte {
+	key := make([]byte, len(hash)+len(prefix))
+	copy(key, prefix)
+	copy(key[4:], hash.Bytes())
+
+	return key
+}
+
 // ReadPreimage retrieves a single preimage of the provided hash.
 func ReadPreimage(db ethdb.KeyValueReader, hash common.Hash) []byte {
 	data, _ := db.Get(preimageKey(hash))
@@ -75,10 +83,27 @@ func DeleteCode(db ethdb.KeyValueWriter, hash common.Hash) {
 	}
 }
 
+// ReadTrieNodeWithPrefix retrieves the trie of the provided hash, prefixed with some bytes.
+func ReadTrieNodeWithPrefix(db ethdb.KeyValueReader, hash common.Hash, prefix []byte) []byte {
+	key := createPrefixKey(hash, prefix)
+
+	data, _ := db.Get(key)
+	return data
+}
+
 // ReadTrieNode retrieves the trie node of the provided hash.
 func ReadTrieNode(db ethdb.KeyValueReader, hash common.Hash) []byte {
 	data, _ := db.Get(hash.Bytes())
 	return data
+}
+
+// WriteTrieNode writes the provided trie node database, prefixing the key with the specified bytes.
+func WriteTrieNodeWithPrefix(db ethdb.KeyValueWriter, hash common.Hash, node, prefix []byte) {
+	key := createPrefixKey(hash, prefix)
+
+	if err := db.Put(key, node); err != nil {
+		log.Crit("Failed to store trie node", "err", err)
+	}
 }
 
 // WriteTrieNode writes the provided trie node database.
