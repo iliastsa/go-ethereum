@@ -326,11 +326,11 @@ func (db *Database) insert(hash common.Hash, size int, node node, prefix []byte)
 		flushPrev: db.newest,
 	}
 
+	var addrPrefix [4]byte
 	if len(prefix) == 4 {
-		var addr_prefix [4]byte
-		copy(addr_prefix[:], prefix)
+		copy(addrPrefix[:], prefix)
 
-		entry.owners[addr_prefix] = struct{}{}
+		entry.owners[addrPrefix] = struct{}{}
 	}
 
 	entry.forChilds(func(child common.Hash) {
@@ -338,7 +338,15 @@ func (db *Database) insert(hash common.Hash, size int, node node, prefix []byte)
 			c.parents++
 		}
 	})
-	db.dirties[hash] = entry
+
+	// If the node already exists in the cache just register the owner.
+	// Otherwise just replace.
+	if existing := db.dirties[hash]; existing != nil && len(prefix) == 4 {
+		existing.owners[addrPrefix] = struct{}{}
+		existing.flushPrev = db.newest
+	} else {
+		db.dirties[hash] = entry
+	}
 
 	// Update the flush-list endpoints
 	if db.oldest == (common.Hash{}) {
