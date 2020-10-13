@@ -25,7 +25,7 @@ import (
 func createPrefixKey(hash common.Hash, prefix []byte) []byte {
 	key := make([]byte, len(hash)+len(prefix))
 	copy(key, prefix)
-	copy(key[4:], hash.Bytes())
+	copy(key[len(prefix):], hash.Bytes())
 
 	return key
 }
