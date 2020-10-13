@@ -324,6 +324,7 @@ func (db *Database) insert(hash common.Hash, size int, node node, prefix []byte)
 		node:      simplifyNode(node),
 		size:      uint16(size),
 		flushPrev: db.newest,
+		owners:    make(map[[4]byte]struct{}),
 	}
 
 	var addrPrefix [4]byte
@@ -769,10 +770,14 @@ func (db *Database) commit(hash common.Hash, batch ethdb.Batch, uncacher *cleane
 		return err
 	}
 
-	// We write each node for each "owner", to improve locality. The idea is that trie nodes (internal or leaf/value
-	// nodes are placed closed to each other)
-	for owner := range node.owners {
-		rawdb.WriteTrieNodeWithPrefix(batch, hash, node.rlp(), owner[:])
+	if len(node.owners) == 0 {
+		rawdb.WriteTrieNode(batch, hash, node.rlp())
+	} else {
+		// We write each node for each "owner", to improve locality. The idea is that trie nodes (internal or leaf/value
+		// nodes are placed closed to each other)
+		for owner := range node.owners {
+			rawdb.WriteTrieNodeWithPrefix(batch, hash, node.rlp(), owner[:])
+		}
 	}
 
 	// TODO: Check this
