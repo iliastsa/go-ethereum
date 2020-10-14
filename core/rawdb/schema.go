@@ -74,6 +74,7 @@ var (
 
 	preimagePrefix = []byte("secure-key-")      // preimagePrefix + hash -> preimage
 	configPrefix   = []byte("ethereum-config-") // config prefix for the db
+	trieNodePrefix = []byte("trie-node-owner-") // ownership prefix for trie nodes
 
 	// Chain index prefixes (use `i` + single byte to avoid mixing data types).
 	BloomBitsIndexPrefix = []byte("iB") // BloomBitsIndexPrefix is the data table of a chain indexer to track its progress
@@ -189,9 +190,18 @@ func bloomBitsKey(bit uint, section uint64, hash common.Hash) []byte {
 	return key
 }
 
+func createPrefixKey(hash common.Hash, prefix []byte) []byte {
+	return append(prefix, hash.Bytes()...)
+}
+
 // preimageKey = preimagePrefix + hash
 func preimageKey(hash common.Hash) []byte {
 	return append(preimagePrefix, hash.Bytes()...)
+}
+
+// ownershipKey = trieNodePrefix + hash
+func ownershipKey(hash common.Hash) []byte {
+	return append(trieNodePrefix, hash.Bytes()...)
 }
 
 // codeKey = codePrefix + hash

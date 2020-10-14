@@ -22,14 +22,6 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 )
 
-func createPrefixKey(hash common.Hash, prefix []byte) []byte {
-	key := make([]byte, len(hash)+len(prefix))
-	copy(key, prefix)
-	copy(key[len(prefix):], hash.Bytes())
-
-	return key
-}
-
 // ReadPreimage retrieves a single preimage of the provided hash.
 func ReadPreimage(db ethdb.KeyValueReader, hash common.Hash) []byte {
 	data, _ := db.Get(preimageKey(hash))
@@ -93,8 +85,31 @@ func ReadTrieNodeWithPrefix(db ethdb.KeyValueReader, hash common.Hash, prefix []
 
 // ReadTrieNode retrieves the trie node of the provided hash.
 func ReadTrieNode(db ethdb.KeyValueReader, hash common.Hash) []byte {
+	// Try reading without owner prefix
 	data, _ := db.Get(hash.Bytes())
+
+	// If non-owner prefixed read did not work, then try reading with prefix.
+	if data == nil {
+		// If owner does not exist, then we don't have the node.
+		if owner := ReadTrieNodeOwner(db, hash); owner != nil {
+			return ReadTrieNodeWithPrefix(db, hash, owner)
+		}
+	}
 	return data
+}
+
+func ReadTrieNodeOwner(db ethdb.KeyValueReader, hash common.Hash) []byte {
+	key := ownershipKey(hash)
+	owner, _ := db.Get(key)
+	return owner
+}
+
+func WriteTrieNodeOwner(db ethdb.KeyValueWriter, hash common.Hash, owner []byte) {
+	key := ownershipKey(hash)
+
+	if err := db.Put(key, owner); err != nil {
+		log.Crit("Failed to store trie node", "err", err)
+	}
 }
 
 // WriteTrieNode writes the provided trie node database, prefixing the key with the specified bytes.
@@ -102,7 +117,7 @@ func WriteTrieNodeWithPrefix(db ethdb.KeyValueWriter, hash common.Hash, node, pr
 	key := createPrefixKey(hash, prefix)
 
 	if err := db.Put(key, node); err != nil {
-		log.Crit("Failed to store trie node", "err", err)
+		log.Crit("Failed to store trie node owner", "err", err)
 	}
 }
 

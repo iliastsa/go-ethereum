@@ -778,6 +778,12 @@ func (db *Database) commit(hash common.Hash, batch ethdb.Batch, uncacher *cleane
 		for owner := range node.owners {
 			rawdb.WriteTrieNodeWithPrefix(batch, hash, node.rlp(), owner[:])
 		}
+
+		// A bit of a hack to write hash-to-owner mapping for the first value we iterate only
+		for owner := range node.owners {
+			rawdb.WriteTrieNodeOwner(batch, hash, owner[:])
+			break
+		}
 	}
 
 	// TODO: Check this
