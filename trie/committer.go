@@ -71,6 +71,7 @@ func newCommitter() *committer {
 func returnCommitterToPool(h *committer) {
 	h.onleaf = nil
 	h.leafCh = nil
+	h.prefix = nil
 	committerPool.Put(h)
 }
 
