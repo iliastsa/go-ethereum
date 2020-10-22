@@ -201,7 +201,7 @@ func (dl *diskLayer) generate(stats *generatorStats) {
 		}
 		// If the account is in-progress, continue where we left off (otherwise iterate all)
 		if acc.Root != emptyRoot {
-			storeTrie, err := trie.NewSecure(acc.Root, dl.triedb)
+			storeTrie, err := trie.NewSecureStorage(acc.Root, accountHash, dl.triedb)
 			if err != nil {
 				log.Error("Generator failed to access storage trie", "accroot", dl.root, "acchash", common.BytesToHash(accIt.Key), "stroot", acc.Root, "err", err)
 				abort := <-dl.genAbort
