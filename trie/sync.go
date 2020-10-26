@@ -142,12 +142,12 @@ func NewSync(root common.Hash, database ethdb.KeyValueReader, callback LeafCallb
 		fetches:  make(map[int]int),
 		bloom:    bloom,
 	}
-	ts.AddSubTrie(root, nil, common.Hash{}, callback)
+	ts.AddSubTrie(root, nil, nil, common.Hash{}, callback)
 	return ts
 }
 
 // AddSubTrie registers a new trie to the sync code, rooted at the designated parent.
-func (s *Sync) AddSubTrie(root common.Hash, path []byte, parent common.Hash, callback LeafCallback) {
+func (s *Sync) AddSubTrie(root common.Hash, path , owner []byte, parent common.Hash, callback LeafCallback) {
 	// Short circuit if the trie is empty or already known
 	if root == emptyRoot {
 		return
