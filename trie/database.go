@@ -329,7 +329,7 @@ func (db *Database) insert(hash common.Hash, size int, node node, prefix []byte)
 
 	var addrPrefix [4]byte
 	if len(prefix) == 4 {
-		copy(addrPrefix[:0], prefix)
+		copy(addrPrefix[:], prefix)
 
 		entry.owners[addrPrefix] = struct{}{}
 	}
