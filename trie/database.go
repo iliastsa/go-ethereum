@@ -314,7 +314,13 @@ func (db *Database) DiskDB() ethdb.KeyValueStore {
 // and in theory should only used for **trie nodes** insertion.
 func (db *Database) insert(hash common.Hash, size int, node node, prefix []byte) {
 	// If the node's already cached, skip
-	if _, ok := db.dirties[hash]; ok {
+	if existing, ok := db.dirties[hash]; ok {
+		if len(prefix) == 4 {
+			var addrPrefix [4]byte
+			copy(addrPrefix[:], prefix)
+			existing.owners[addrPrefix] = struct{}{}
+		}
+
 		return
 	}
 	memcacheDirtyWriteMeter.Mark(int64(size))
@@ -327,8 +333,8 @@ func (db *Database) insert(hash common.Hash, size int, node node, prefix []byte)
 		owners:    make(map[[4]byte]struct{}),
 	}
 
-	var addrPrefix [4]byte
 	if len(prefix) == 4 {
+		var addrPrefix [4]byte
 		copy(addrPrefix[:], prefix)
 
 		entry.owners[addrPrefix] = struct{}{}
@@ -339,15 +345,7 @@ func (db *Database) insert(hash common.Hash, size int, node node, prefix []byte)
 			c.parents++
 		}
 	})
-
-	// If the node already exists in the cache just register the owner.
-	// Otherwise just replace.
-	if existing := db.dirties[hash]; existing != nil && len(prefix) == 4 {
-		existing.owners[addrPrefix] = struct{}{}
-		existing.flushPrev = db.newest
-	} else {
-		db.dirties[hash] = entry
-	}
+	db.dirties[hash] = entry
 
 	// Update the flush-list endpoints
 	if db.oldest == (common.Hash{}) {
